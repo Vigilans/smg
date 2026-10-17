@@ -21,6 +21,7 @@ use openai_protocol::{
     completion::CompletionRequest,
     embedding::EmbeddingRequest,
     generate::GenerateRequest,
+    images::ImageGenerationRequest,
     interactions::InteractionsRequest,
     messages::CreateMessageRequest,
     multipart::AudioTranscriptionMultipart,
@@ -352,6 +353,31 @@ async fn v1_audio_transcriptions(
             &request.model,
         ))
         .await
+}
+
+async fn v1_image_generations(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Extension(tenant_meta): Extension<middleware::TenantRequestMeta>,
+    cancel: middleware::scheduler::PreemptionGuard,
+    Json(body): Json<ImageGenerationRequest>,
+) -> Response {
+    let model = body.model.clone();
+    cancel
+        .guard(
+            state
+                .router
+                .route_image_generations(Some(&headers), &tenant_meta, body, &model),
+        )
+        .await
+}
+
+async fn v1_image_edits(
+    State(state): State<Arc<AppState>>,
+    cancel: middleware::scheduler::PreemptionGuard,
+    req: Request<Body>,
+) -> Response {
+    cancel.guard(state.router.route_image_edits(req)).await
 }
 
 async fn v1_audio_speech(
@@ -895,6 +921,7 @@ pub fn build_app(
             .route("/v1/interactions", post(v1_interactions))
             .route("/v1/classify", post(v1_classify))
             .route("/v1/audio/speech", post(v1_audio_speech))
+            .route("/v1/images/generations", post(v1_image_generations))
             // Per-request buffer-vs-stream decision for typed-JSON bodies;
             // declined requests pass to the handlers untouched.
             .route_layer(axum::middleware::from_fn_with_state(
@@ -955,7 +982,9 @@ pub fn build_app(
     // routinely exceed that, so WASM middleware would reject them with 400
     // before reaching the handler.
     let multipart_upload_routes = with_admission_layer(
-        Router::new().route("/v1/audio/transcriptions", post(v1_audio_transcriptions)),
+        Router::new()
+            .route("/v1/audio/transcriptions", post(v1_audio_transcriptions))
+            .route("/v1/images/edits", post(v1_image_edits)),
         &admission_mode,
         app_state.clone(),
     )

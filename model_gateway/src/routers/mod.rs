@@ -15,6 +15,7 @@ use openai_protocol::{
     completion::CompletionRequest,
     embedding::EmbeddingRequest,
     generate::GenerateRequest,
+    images::ImageGenerationRequest,
     interactions::InteractionsRequest,
     messages::CreateMessageRequest,
     realtime_session::{
@@ -195,6 +196,26 @@ pub trait RouterTrait: Send + Sync + Debug {
             "Audio transcriptions not implemented",
         )
             .into_response()
+    }
+
+    /// Route image generation requests (OpenAI-compatible /v1/images/generations).
+    async fn route_image_generations(
+        &self,
+        _headers: Option<&HeaderMap>,
+        _tenant_meta: &TenantRequestMeta,
+        _body: ImageGenerationRequest,
+        _model_id: &str,
+    ) -> Response {
+        (
+            StatusCode::NOT_IMPLEMENTED,
+            "Image generation not implemented",
+        )
+            .into_response()
+    }
+
+    /// Route multipart image edits over HTTP.
+    async fn route_image_edits(&self, _req: Request<Body>) -> Response {
+        (StatusCode::NOT_IMPLEMENTED, "Image editing not implemented").into_response()
     }
 
     /// Route speech generation requests (OpenAI-compatible /v1/audio/speech).

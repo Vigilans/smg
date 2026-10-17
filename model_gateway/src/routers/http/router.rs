@@ -21,6 +21,7 @@ use openai_protocol::{
     completion::CompletionRequest,
     embedding::EmbeddingRequest,
     generate::GenerateRequest,
+    images::ImageGenerationRequest,
     messages::CreateMessageRequest,
     realtime_session::{
         RealtimeClientSecretCreateRequest, RealtimeSessionCreateRequest,
@@ -82,6 +83,8 @@ use crate::{
     },
 };
 
+mod images;
+mod multipart;
 /// Max body size for a WebRTC `/v1/realtime/calls` SDP offer (10 MiB).
 const WEBRTC_REQUEST_BODY_LIMIT: usize = 10 * 1024 * 1024;
 
@@ -2004,6 +2007,21 @@ impl RouterTrait for Router {
         .await
     }
 
+    async fn route_image_generations(
+        &self,
+        headers: Option<&HeaderMap>,
+        _tenant_meta: &TenantRequestMeta,
+        body: ImageGenerationRequest,
+        model_id: &str,
+    ) -> Response {
+        self.route_typed_request(headers, body, "/v1/images/generations", model_id)
+            .await
+    }
+
+    async fn route_image_edits(&self, req: Request<Body>) -> Response {
+        self.handle_image_edit(req).await
+    }
+
     async fn route_audio_speech(
         &self,
         headers: Option<&HeaderMap>,
@@ -2649,7 +2667,7 @@ mod tests {
         }
     }
 
-    fn streaming_router(
+    pub(super) fn streaming_router(
         policy: PolicyConfig,
         max_payload_size: usize,
         workers: Vec<crate::worker::BasicWorker>,

@@ -24,6 +24,7 @@ use openai_protocol::{
     completion::CompletionRequest,
     embedding::EmbeddingRequest,
     generate::GenerateRequest,
+    images::ImageGenerationRequest,
     interactions::InteractionsRequest,
     messages::CreateMessageRequest,
     realtime_session::{
@@ -579,6 +580,32 @@ impl RouterTrait for Gateway {
                 .await
         })
         .await
+    }
+
+    async fn route_image_generations(
+        &self,
+        headers: Option<&HeaderMap>,
+        tenant_meta: &TenantRequestMeta,
+        body: ImageGenerationRequest,
+        model_id: &str,
+    ) -> Response {
+        self.dispatch(Some(model_id), NO_ROUTER, |router| async move {
+            router
+                .route_image_generations(headers, tenant_meta, body, model_id)
+                .await
+        })
+        .await
+    }
+
+    async fn route_image_edits(&self, req: Request<Body>) -> Response {
+        let router = self
+            .routers
+            .get(&router_ids::HTTP_REGULAR)
+            .map(|entry| Arc::clone(entry.value()));
+        match router {
+            Some(router) => router.route_image_edits(req).await,
+            None => NO_ROUTER.into_response(),
+        }
     }
 
     async fn route_audio_speech(
