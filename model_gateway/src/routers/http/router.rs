@@ -1402,7 +1402,7 @@ impl Router {
                 );
             }
         };
-        let rerank_results = match serde_json::from_slice::<Vec<RerankResult>>(&body_bytes) {
+        let worker_response = match serde_json::from_slice::<WorkerRerankResponse>(&body_bytes) {
             Ok(results) => results,
             Err(e) => {
                 error!("Failed to build rerank response: {e}");
@@ -1412,9 +1412,14 @@ impl Router {
                 );
             }
         };
+        let (mut rerank_results, usage) = match worker_response {
+            WorkerRerankResponse::Results(results) => (results, None),
+            WorkerRerankResponse::Object { results, usage } => (results, usage.map(Into::into)),
+        };
+        rerank_results.sort_by(|a, b| b.score.total_cmp(&a.score));
         let model = canonical_model.map_or(req.model, ToOwned::to_owned);
         let mut rerank_response = RerankResponse::new(rerank_results, model, req.rid);
-        // Sorting is handled by Python worker (serving_rerank.py)
+        rerank_response.usage = usage;
         if let Some(top_k) = req.top_k {
             rerank_response.apply_top_k(top_k);
         }
@@ -1422,6 +1427,43 @@ impl Router {
             rerank_response.drop_documents();
         }
         Json(rerank_response).into_response()
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum WorkerRerankResponse {
+    Results(Vec<RerankResult>),
+    Object {
+        results: Vec<RerankResult>,
+        #[serde(default)]
+        usage: Option<WorkerRerankUsage>,
+    },
+}
+
+#[derive(serde::Deserialize)]
+struct WorkerRerankUsage {
+    #[serde(default)]
+    prompt_tokens: u32,
+    #[serde(default)]
+    completion_tokens: u32,
+    #[serde(default)]
+    total_tokens: u32,
+    #[serde(default)]
+    reasoning_tokens: Option<u32>,
+    #[serde(default)]
+    prompt_tokens_details: Option<openai_protocol::common::PromptTokenUsageInfo>,
+}
+
+impl From<WorkerRerankUsage> for openai_protocol::common::UsageInfo {
+    fn from(usage: WorkerRerankUsage) -> Self {
+        Self {
+            prompt_tokens: usage.prompt_tokens,
+            completion_tokens: usage.completion_tokens,
+            total_tokens: usage.total_tokens,
+            reasoning_tokens: usage.reasoning_tokens,
+            prompt_tokens_details: usage.prompt_tokens_details,
+        }
     }
 }
 
@@ -2407,6 +2449,39 @@ mod tests {
         assert_eq!(rerank.model, "test-model");
         assert_eq!(rerank.results.len(), 1);
         assert_eq!(rerank.results[0].document, None);
+    }
+
+    #[tokio::test]
+    async fn build_rerank_response_accepts_vllm_object_and_sorts_scores() {
+        let req = rerank_request();
+        let body = serde_json::to_vec(&serde_json::json!({
+            "results": [
+                {"index": 1, "document": {"text": "d2"}, "relevance_score": 0.5},
+                {"index": 0, "document": {"text": "d1"}, "relevance_score": 0.9}
+            ],
+            "usage": {
+                "prompt_tokens": 3,
+                "completion_tokens": 0,
+                "total_tokens": 3
+            }
+        }))
+        .unwrap();
+        let upstream = Response::new(Body::from(body.clone()));
+
+        let response = Router::build_rerank_response(
+            RerankResponseSpec::from(&req),
+            None,
+            upstream,
+            body.len(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let rerank: RerankResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(rerank.results[0].index, 0);
+        assert_eq!(rerank.results[0].score, 0.9);
+        assert!(rerank.usage.is_some());
     }
 
     #[tokio::test]

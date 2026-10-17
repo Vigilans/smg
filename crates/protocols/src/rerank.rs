@@ -36,7 +36,7 @@ pub struct RerankRequest {
     pub model: String,
 
     /// Maximum number of documents to return (optional)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(alias = "top_n", skip_serializing_if = "Option::is_none")]
     #[validate(range(min = 1))]
     pub top_k: Option<usize>,
 
@@ -127,9 +127,11 @@ impl RerankRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RerankResult {
     /// Relevance score for the document
+    #[serde(alias = "relevance_score")]
     pub score: f32,
 
     /// The document text (if return_documents was true)
+    #[serde(default, deserialize_with = "deserialize_rerank_document")]
     pub document: Option<String>,
 
     /// Original index of the document in the request
@@ -137,6 +139,25 @@ pub struct RerankResult {
 
     /// Additional metadata about the ranking
     pub meta_info: Option<HashMap<String, Value>>,
+}
+
+fn deserialize_rerank_document<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(text)) => Ok(Some(text)),
+        Some(Value::Object(mut document)) => document
+            .remove("text")
+            .and_then(|text| text.as_str().map(ToOwned::to_owned))
+            .map(Some)
+            .ok_or_else(|| serde::de::Error::custom("rerank document object must contain text")),
+        Some(_) => Err(serde::de::Error::custom(
+            "rerank document must be a string or object",
+        )),
+    }
 }
 
 /// Rerank response containing sorted results
@@ -160,6 +181,52 @@ pub struct RerankResponse {
 
     /// Creation timestamp
     pub created: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct V1RerankDocument {
+    pub text: String,
+}
+
+#[serde_with::skip_serializing_none]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct V1RerankResult {
+    pub index: usize,
+    pub relevance_score: f32,
+    pub document: Option<V1RerankDocument>,
+    pub meta_info: Option<HashMap<String, Value>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct V1RerankResponse {
+    pub results: Vec<V1RerankResult>,
+    pub model: String,
+    pub usage: Option<UsageInfo>,
+    pub object: String,
+    pub id: Option<StringOrArray>,
+    pub created: i64,
+}
+
+impl From<RerankResponse> for V1RerankResponse {
+    fn from(response: RerankResponse) -> Self {
+        Self {
+            results: response
+                .results
+                .into_iter()
+                .map(|result| V1RerankResult {
+                    index: result.index,
+                    relevance_score: result.score,
+                    document: result.document.map(|text| V1RerankDocument { text }),
+                    meta_info: result.meta_info,
+                })
+                .collect(),
+            model: response.model,
+            usage: response.usage,
+            object: response.object,
+            id: response.id,
+            created: response.created,
+        }
+    }
 }
 
 impl RerankResponse {
@@ -198,6 +265,12 @@ impl RerankResponse {
 pub struct V1RerankReqInput {
     pub query: String,
     pub documents: Vec<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default, alias = "top_n")]
+    pub top_k: Option<usize>,
+    #[serde(default = "default_true")]
+    pub return_documents: bool,
 }
 
 /// Convert V1RerankReqInput to RerankRequest
@@ -206,11 +279,37 @@ impl From<V1RerankReqInput> for RerankRequest {
         RerankRequest {
             query: v1.query,
             documents: v1.documents,
-            model: super::UNKNOWN_MODEL_ID.to_string(),
-            top_k: None,
-            return_documents: true,
+            model: v1
+                .model
+                .unwrap_or_else(|| super::UNKNOWN_MODEL_ID.to_string()),
+            top_k: v1.top_k,
+            return_documents: v1.return_documents,
             rid: None,
             user: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn v1_response_uses_new_api_result_shape() {
+        let response = RerankResponse::new(
+            vec![RerankResult {
+                score: 0.75,
+                document: Some("document text".to_string()),
+                index: 3,
+                meta_info: None,
+            }],
+            "model".to_string(),
+            None,
+        );
+
+        let value = serde_json::to_value(V1RerankResponse::from(response)).unwrap();
+        assert_eq!(value["results"][0]["relevance_score"], 0.75);
+        assert_eq!(value["results"][0]["document"]["text"], "document text");
+        assert!(value["results"][0].get("score").is_none());
     }
 }

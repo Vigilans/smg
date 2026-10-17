@@ -7,6 +7,7 @@ use std::{
 };
 
 use axum::{
+    body::{to_bytes, Body},
     extract::{Extension, Path, Query, Request, State},
     http::{header::InvalidHeaderName, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
@@ -28,7 +29,7 @@ use openai_protocol::{
         RealtimeClientSecretCreateRequest, RealtimeSessionCreateRequest,
         RealtimeTranscriptionSessionCreateRequest,
     },
-    rerank::{RerankRequest, V1RerankReqInput},
+    rerank::{RerankRequest, RerankResponse, V1RerankReqInput, V1RerankResponse},
     responses::ResponsesRequest,
     tokenize::{AddTokenizerRequest, DetokenizeRequest, TokenizeRequest},
     validated::ValidatedJson,
@@ -220,13 +221,32 @@ async fn v1_rerank(
 ) -> Response {
     let rerank_body: RerankRequest = body.into();
     let model = rerank_body.model.clone();
-    cancel
+    let response = cancel
         .guard(
             state
                 .router
                 .route_rerank(Some(&headers), &tenant_meta, rerank_body, &model),
         )
-        .await
+        .await;
+    into_v1_rerank_response(response).await
+}
+
+async fn into_v1_rerank_response(response: Response) -> Response {
+    if !response.status().is_success() {
+        return response;
+    }
+
+    let (parts, body) = response.into_parts();
+    let Ok(bytes) = to_bytes(body, usize::MAX).await else {
+        return Response::from_parts(parts, Body::empty());
+    };
+    let Ok(response) = serde_json::from_slice::<RerankResponse>(&bytes) else {
+        return Response::from_parts(parts, Body::from(bytes));
+    };
+    let Ok(bytes) = serde_json::to_vec(&V1RerankResponse::from(response)) else {
+        return Response::from_parts(parts, Body::from(bytes));
+    };
+    Response::from_parts(parts, Body::from(bytes))
 }
 
 async fn v1_responses(

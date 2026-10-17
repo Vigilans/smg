@@ -359,6 +359,9 @@ fn test_v1_rerank_req_input_serialization() {
     let v1_input = V1RerankReqInput {
         query: "test query".to_string(),
         documents: vec!["doc1".to_string(), "doc2".to_string()],
+        model: None,
+        top_k: None,
+        return_documents: true,
     };
 
     let serialized = to_string(&v1_input).unwrap();
@@ -373,6 +376,9 @@ fn test_v1_to_rerank_request_conversion() {
     let v1_input = V1RerankReqInput {
         query: "test query".to_string(),
         documents: vec!["doc1".to_string(), "doc2".to_string()],
+        model: None,
+        top_k: None,
+        return_documents: true,
     };
 
     let request: RerankRequest = v1_input.into();
@@ -384,6 +390,19 @@ fn test_v1_to_rerank_request_conversion() {
     assert!(request.return_documents);
     assert_eq!(request.rid, None);
     assert_eq!(request.user, None);
+}
+
+#[test]
+fn test_v1_rerank_preserves_model_and_top_n_alias() {
+    let v1_input: V1RerankReqInput = from_str(
+        r#"{"query":"q","documents":["d"],"model":"bge","top_n":1,"return_documents":false}"#,
+    )
+    .unwrap();
+
+    let request: RerankRequest = v1_input.into();
+    assert_eq!(request.model, "bge");
+    assert_eq!(request.top_k, Some(1));
+    assert!(!request.return_documents);
 }
 
 #[test]
