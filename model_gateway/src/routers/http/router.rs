@@ -2164,6 +2164,54 @@ mod tests {
         worker::BasicWorkerBuilder,
     };
 
+    #[tokio::test]
+    async fn embeddings_forward_media_options_and_cache_salt() {
+        let app = axum::Router::new().route(
+            "/v1/embeddings",
+            axum::routing::post(|Json(body): Json<serde_json::Value>| async move { Json(body) }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "test server is aborted at test end"
+        )]
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let worker = BasicWorkerBuilder::new(&url)
+            .model(openai_protocol::model_card::ModelCard::new(
+                "embedding-model",
+            ))
+            .health_config(HealthCheckConfig {
+                disable_health_check: true,
+                ..Default::default()
+            })
+            .build();
+        let router = streaming_router(PolicyConfig::RoundRobin, 1024 * 1024, vec![worker]);
+        let body = serde_json::json!({
+            "model": "embedding-model",
+            "input": [{"role": "user", "content": [
+                {"type": "text", "text": "Describe the motion"},
+                {"type": "video_url", "video_url": {"url": "https://example.invalid/video.mp4"}}
+            ]}],
+            "media_io_kwargs": {"video": {"num_frames": 256}},
+            "cache_salt": "tenant-a"
+        });
+        let request: EmbeddingRequest = serde_json::from_value(body.clone()).unwrap();
+        let response = router
+            .route_embeddings(
+                None,
+                &TenantRequestMeta::new("test".into()),
+                request,
+                "embedding-model",
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let received: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+        assert_eq!(received, body);
+        server.abort();
+    }
+
     /// Accepts `kill_first` connections and closes them before any response
     /// bytes, then serves a minimal 200 on every later connection. Returns
     /// (addr, accepted-connection counter).

@@ -10,6 +10,8 @@ fn test_embedding_request_serialization_string_input() {
         user: Some("user-1".to_string()),
         dimensions: Some(128),
         rid: Some("rid-123".to_string()),
+        media_io_kwargs: Some(json!({"video": {"num_frames": 256}})),
+        cache_salt: Some("tenant-a".to_string()),
     };
 
     let serialized = to_string(&req).unwrap();
@@ -21,6 +23,8 @@ fn test_embedding_request_serialization_string_input() {
     assert_eq!(deserialized.user, req.user);
     assert_eq!(deserialized.dimensions, req.dimensions);
     assert_eq!(deserialized.rid, req.rid);
+    assert_eq!(deserialized.media_io_kwargs, req.media_io_kwargs);
+    assert_eq!(deserialized.cache_salt, req.cache_salt);
 }
 
 #[test]
@@ -32,6 +36,8 @@ fn test_embedding_request_serialization_array_input() {
         user: None,
         dimensions: None,
         rid: None,
+        media_io_kwargs: None,
+        cache_salt: None,
     };
 
     let serialized = to_string(&req).unwrap();
@@ -49,6 +55,8 @@ fn test_embedding_generation_request_trait_string() {
         user: None,
         dimensions: None,
         rid: None,
+        media_io_kwargs: None,
+        cache_salt: None,
     };
     assert!(!req.is_stream());
     assert_eq!(req.get_model(), Some("emb-model"));
@@ -64,6 +72,8 @@ fn test_embedding_generation_request_trait_array() {
         user: None,
         dimensions: None,
         rid: None,
+        media_io_kwargs: None,
+        cache_salt: None,
     };
     assert_eq!(req.extract_text_for_routing(), "hello world");
 }
@@ -77,6 +87,8 @@ fn test_embedding_generation_request_trait_non_text() {
         user: None,
         dimensions: None,
         rid: None,
+        media_io_kwargs: None,
+        cache_salt: None,
     };
     assert_eq!(req.extract_text_for_routing(), "");
 }
@@ -90,6 +102,8 @@ fn test_embedding_generation_request_trait_mixed_array_ignores_nested() {
         user: None,
         dimensions: None,
         rid: None,
+        media_io_kwargs: None,
+        cache_salt: None,
     };
     // Only top-level string elements are extracted
     assert_eq!(req.extract_text_for_routing(), "a");

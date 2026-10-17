@@ -27,6 +27,12 @@ pub struct EmbeddingRequest {
 
     /// SGLang extension: request id for tracking
     pub rid: Option<String>,
+
+    /// vLLM media loading options keyed by modality.
+    pub media_io_kwargs: Option<Value>,
+
+    /// vLLM prefix-cache isolation salt.
+    pub cache_salt: Option<String>,
 }
 
 impl GenerationRequest for EmbeddingRequest {
