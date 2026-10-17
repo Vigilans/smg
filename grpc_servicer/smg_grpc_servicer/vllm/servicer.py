@@ -143,16 +143,26 @@ class VllmEngineServicer(vllm_engine_pb2_grpc.VllmEngineServicer):
     - GetTokenizer: Stream tokenizer artifacts
     """
 
-    def __init__(self, async_llm: EngineClient, start_time: float):
+    def __init__(
+        self,
+        async_llm: EngineClient,
+        start_time: float,
+        openai_serving_decisions=None,
+        serving_structured_decisions=None,
+    ):
         """
         Initialize the servicer.
 
         Args:
             async_llm: The EngineClient instance (e.g. AsyncLLM)
             start_time: The server start time, in seconds since epoch
+            openai_serving_decisions: vLLM's native /v1/decisions handler
+            serving_structured_decisions: vLLM's native /v1/systemone handler
         """
         self.engine = async_llm
         self.start_time = start_time
+        self.openai_serving_decisions = openai_serving_decisions
+        self.serving_structured_decisions = serving_structured_decisions
         # Resolve KV-event publishing config from the engine. Non-None only when
         # vLLM was started with --kv-events-config enabling the ZMQ publisher.
         self._kv_events_config = resolve_kv_events_config(async_llm)
@@ -524,6 +534,48 @@ class VllmEngineServicer(vllm_engine_pb2_grpc.VllmEngineServicer):
             kv_engine_id=kv_engine_id,
             data_parallel_size=parallel.data_parallel_size,
             shm_namespace_id=mm_shm.shm_namespace_id(),
+            native_decision_apis=",".join(
+                name
+                for name, handler in (
+                    ("decisions", self.openai_serving_decisions),
+                    ("systemone", self.serving_structured_decisions),
+                )
+                if handler is not None
+            ),
+        )
+
+    async def Decisions(
+        self,
+        request: vllm_engine_pb2.NativeApiRequest,
+        context: grpc.aio.ServicerContext,
+    ) -> vllm_engine_pb2.NativeApiResponse:
+        """Serve a /v1/decisions body with vLLM's native handler."""
+        from vllm.entrypoints.openai.decisions.protocol import DecisionRequest
+
+        handler = self.openai_serving_decisions
+        return await self._native_api(
+            request,
+            DecisionRequest,
+            None if handler is None else handler.create_decisions,
+            "The model does not support the Decisions API",
+        )
+
+    async def SystemOne(
+        self,
+        request: vllm_engine_pb2.NativeApiRequest,
+        context: grpc.aio.ServicerContext,
+    ) -> vllm_engine_pb2.NativeApiResponse:
+        """Serve a /v1/systemone body with vLLM's native handler."""
+        from vllm.entrypoints.generate.structured_decisions.protocol import (
+            StructuredDecisionRequest,
+        )
+
+        handler = self.serving_structured_decisions
+        return await self._native_api(
+            request,
+            StructuredDecisionRequest,
+            None if handler is None else handler.create_decision,
+            "The model does not support the structured decision API",
         )
 
     async def GetLoads(
@@ -634,6 +686,33 @@ class VllmEngineServicer(vllm_engine_pb2_grpc.VllmEngineServicer):
             offset = end
 
     # ========== Helper methods ==========
+
+    @staticmethod
+    async def _native_api(
+        request: vllm_engine_pb2.NativeApiRequest,
+        model_cls,
+        create,
+        unsupported: str,
+    ) -> vllm_engine_pb2.NativeApiResponse:
+        """Run a native vLLM handler on a raw JSON body, as its HTTP route does."""
+        from vllm.entrypoints.serve.engine.protocol import ErrorResponse
+        from vllm.entrypoints.serve.exception_handling.error_response import (
+            create_error_response,
+        )
+
+        try:
+            if create is None:
+                raise NotImplementedError(unsupported)
+            result = await create(model_cls.model_validate_json(request.request_json), None)
+        except Exception as e:
+            result = create_error_response(e)
+        if isinstance(result, ErrorResponse):
+            status_code = result.error.code
+        else:
+            status_code = 200
+        return vllm_engine_pb2.NativeApiResponse(
+            status_code=status_code, response_json=result.model_dump_json()
+        )
 
     def _build_preprocessed_mm_inputs(
         self,

@@ -515,6 +515,38 @@ impl VllmEngineClient {
         Ok(response.into_inner())
     }
 
+    /// Serve a native vLLM `/v1/decisions` request body.
+    pub async fn decisions(
+        &self,
+        req: proto::NativeApiRequest,
+    ) -> Result<proto::NativeApiResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        let mut request = Request::new(req);
+
+        if let Err(e) = self.trace_injector.inject(request.metadata_mut()) {
+            warn!("Failed to inject trace context: {}", e);
+        }
+
+        let response = client.decisions(request).await?;
+        Ok(response.into_inner())
+    }
+
+    /// Serve a native vLLM `/v1/systemone` request body.
+    pub async fn system_one(
+        &self,
+        req: proto::NativeApiRequest,
+    ) -> Result<proto::NativeApiResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        let mut request = Request::new(req);
+
+        if let Err(e) = self.trace_injector.inject(request.metadata_mut()) {
+            warn!("Failed to inject trace context: {}", e);
+        }
+
+        let response = client.system_one(request).await?;
+        Ok(response.into_inner())
+    }
+
     fn build_grpc_sampling_params_from_completion(
         request: &CompletionRequest,
     ) -> Result<proto::SamplingParams, String> {

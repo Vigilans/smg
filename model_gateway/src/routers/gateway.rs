@@ -48,7 +48,7 @@ use crate::{
         common::body_policy::REASON_MODEL_SELECTION,
         error as route_error,
         factory::{router_ids, RouterId},
-        BodyPolicy, RouterFactory, RouterTrait,
+        BodyPolicy, NativeDecisionApi, RouterFactory, RouterTrait,
     },
     server::ServerConfig,
     worker::{ConnectionMode, ProviderType, RoutingPool, WorkerRegistry},
@@ -418,6 +418,28 @@ impl RouterTrait for Gateway {
         match router {
             Some(router) => router.get_model_info(req).await,
             None => (StatusCode::SERVICE_UNAVAILABLE, "No routers available").into_response(),
+        }
+    }
+
+    async fn route_native_decision(
+        &self,
+        headers: Option<&HeaderMap>,
+        tenant_meta: &TenantRequestMeta,
+        api: NativeDecisionApi,
+        body: serde_json::Value,
+        model_id: &str,
+    ) -> Response {
+        let router = self
+            .routers
+            .get(&router_ids::GRPC_REGULAR)
+            .map(|entry| Arc::clone(entry.value()));
+        match router {
+            Some(router) => {
+                router
+                    .route_native_decision(headers, tenant_meta, api, body, model_id)
+                    .await
+            }
+            None => NO_ROUTER.into_response(),
         }
     }
 
@@ -899,6 +921,83 @@ mod tests {
 
     fn test_tenant_meta() -> TenantRequestMeta {
         RouteRequestMeta::new(TenantKey::from("test-tenant"))
+    }
+
+    #[tokio::test]
+    async fn native_decisions_route_explicitly_to_grpc_regular() {
+        #[derive(Debug)]
+        struct NativeDecisionStubRouter;
+
+        #[async_trait]
+        impl RouterTrait for NativeDecisionStubRouter {
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+
+            async fn route_native_decision(
+                &self,
+                headers: Option<&HeaderMap>,
+                _tenant_meta: &TenantRequestMeta,
+                api: NativeDecisionApi,
+                body: serde_json::Value,
+                model_id: &str,
+            ) -> Response {
+                assert_eq!(model_id, "model-x");
+                assert_eq!(body["model"], model_id);
+                assert_eq!(headers.unwrap()["x-test"], "forwarded");
+                (StatusCode::OK, api.label()).into_response()
+            }
+
+            fn router_type(&self) -> &'static str {
+                "native-decision"
+            }
+        }
+
+        let request = serde_json::json!({"model": "model-x", "state": "state"});
+        let mut headers = HeaderMap::new();
+        headers.insert("x-test", "forwarded".parse().unwrap());
+        for (enable_igw, api) in [
+            (false, NativeDecisionApi::Decisions),
+            (true, NativeDecisionApi::SystemOne),
+        ] {
+            let manager = test_gateway(enable_igw);
+            manager
+                .worker_registry
+                .register(Arc::new(
+                    BasicWorkerBuilder::new("http://regular:8080")
+                        .worker_type(WorkerType::Regular)
+                        .connection_mode(ConnectionMode::Http)
+                        .model(ModelCard::new("model-x"))
+                        .build(),
+                ))
+                .unwrap();
+            manager.register_router(router_ids::GRPC_PD, Arc::new(PdStubRouter));
+            manager.register_router(router_ids::GRPC_EPD, Arc::new(EpdStubRouter));
+            manager.set_default_router(router_ids::GRPC_PD);
+
+            let missing = manager
+                .route_native_decision(
+                    Some(&headers),
+                    &test_tenant_meta(),
+                    api,
+                    request.clone(),
+                    "model-x",
+                )
+                .await;
+            assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+            manager.register_router(router_ids::GRPC_REGULAR, Arc::new(NativeDecisionStubRouter));
+            let response = manager
+                .route_native_decision(
+                    Some(&headers),
+                    &test_tenant_meta(),
+                    api,
+                    request.clone(),
+                    "model-x",
+                )
+                .await;
+            assert_eq!(response.status(), StatusCode::OK);
+        }
     }
 
     fn generate_request_without_model() -> GenerateRequest {

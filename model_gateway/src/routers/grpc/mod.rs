@@ -12,6 +12,7 @@ pub(crate) mod context;
 pub(crate) mod harmony;
 pub(crate) mod mode;
 pub(crate) mod multimodal;
+pub(crate) mod native_decision;
 pub(crate) mod pipeline;
 pub(crate) mod proto_wrapper;
 pub(crate) mod regular;

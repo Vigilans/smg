@@ -35,6 +35,10 @@ service VllmEngine {
   // Subscribe to KV cache events (server-streaming)
   rpc SubscribeKvEvents(smg.grpc.common.SubscribeKvEventsRequest)
       returns (stream smg.grpc.common.KvEventBatch);
+
+  // Serve vLLM's native /v1/decisions and /v1/systemone handlers
+  rpc Decisions(NativeApiRequest) returns (NativeApiResponse);
+  rpc SystemOne(NativeApiRequest) returns (NativeApiResponse);
 }
 
 // =====================
@@ -342,6 +346,16 @@ message GetModelInfoResponse {
 
 message GetServerInfoRequest {}
 
+// Raw JSON body of a native vLLM API request and its HTTP-equivalent result.
+message NativeApiRequest {
+  string request_json = 1;
+}
+
+message NativeApiResponse {
+  uint32 status_code = 1;
+  string response_json = 2;
+}
+
 message GetServerInfoResponse {
   uint32 active_requests = 1;
   bool is_paused = 2;
@@ -360,6 +374,9 @@ message GetServerInfoResponse {
   // the router can verify a shared /dev/shm before using the SHM tensor
   // transport under `auto`. Empty when it can't be determined.
   string shm_namespace_id = 10;
+
+  // Comma-separated native APIs this worker serves: "decisions", "systemone".
+  string native_decision_apis = 11;
 }
 
 // =====================

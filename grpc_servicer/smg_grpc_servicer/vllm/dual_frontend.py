@@ -13,7 +13,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-def _create_grpc_server(engine: Any, host: str, port: int):
+def _create_grpc_server(engine: Any, host: str, port: int, app_state: Any):
     import grpc
     from grpc_health.v1 import health_pb2_grpc
     from grpc_reflection.v1alpha import reflection
@@ -31,7 +31,13 @@ def _create_grpc_server(engine: Any, host: str, port: int):
         ]
     )
     vllm_engine_pb2_grpc.add_VllmEngineServicer_to_server(
-        VllmEngineServicer(engine, time.time()), server
+        VllmEngineServicer(
+            engine,
+            time.time(),
+            getattr(app_state, "openai_serving_decisions", None),
+            getattr(app_state, "serving_structured_decisions", None),
+        ),
+        server,
     )
     health_servicer = VllmHealthServicer(engine)
     health_pb2_grpc.add_HealthServicer_to_server(health_servicer, server)
@@ -53,23 +59,49 @@ async def _serve_frontends(
     listen_address: str,
     sock: socket.socket,
     args: argparse.Namespace,
-    build_http=None,
     **uvicorn_kwargs: Any,
 ):
-    if build_http is None:
-        from vllm.entrypoints.launchers.api_server.entry import build_and_serve
+    from vllm import envs
+    from vllm.entrypoints.launchers.app import build_app
+    from vllm.entrypoints.launchers.api_server.app_state import init_app_state
+    from vllm.entrypoints.launchers.launcher import serve_http
+    from vllm.entrypoints.launchers.utils.server_utils import get_uvicorn_log_config
 
-        build_http = build_and_serve
+    log_config = get_uvicorn_log_config(args)
+    if log_config is not None:
+        uvicorn_kwargs["log_config"] = log_config
+    supported_tasks = await engine.get_supported_tasks()
+    logger.info("Supported tasks: %s", supported_tasks)
+    app = build_app(args, supported_tasks, engine.model_config)
+    await init_app_state(engine, app.state, args, supported_tasks)
 
     grpc_host = args.smg_grpc_host or args.host or "0.0.0.0"
     grpc_server, health_servicer, grpc_address = _create_grpc_server(
-        engine, grpc_host, args.smg_grpc_port
+        engine, grpc_host, args.smg_grpc_port, app.state
     )
     await grpc_server.start()
     logger.info("SMG gRPC server started on %s", grpc_address)
 
     try:
-        return await build_http(engine, listen_address, sock, args, **uvicorn_kwargs)
+        logger.info("Starting vLLM server on %s", listen_address)
+        return await serve_http(
+            app,
+            sock=sock,
+            enable_ssl_refresh=args.enable_ssl_refresh,
+            host=args.host,
+            port=args.port,
+            log_level=args.uvicorn_log_level,
+            access_log=not args.disable_uvicorn_access_log,
+            timeout_keep_alive=envs.VLLM_HTTP_TIMEOUT_KEEP_ALIVE,
+            ssl_keyfile=args.ssl_keyfile,
+            ssl_certfile=args.ssl_certfile,
+            ssl_ca_certs=args.ssl_ca_certs,
+            ssl_cert_reqs=args.ssl_cert_reqs,
+            ssl_ciphers=args.ssl_ciphers,
+            h11_max_incomplete_event_size=args.h11_max_incomplete_event_size,
+            h11_max_header_count=args.h11_max_header_count,
+            **uvicorn_kwargs,
+        )
     finally:
         health_servicer.set_not_serving()
         await grpc_server.stop(grace=5.0)

@@ -28,6 +28,7 @@ use super::{
     harmony::{serve_harmony_responses, serve_harmony_responses_stream, HarmonyDetector},
     mode::Mode,
     multimodal::MultimodalComponents,
+    native_decision,
     pipeline::{Endpoint, PipelineDeps, RequestPipeline},
     regular::responses,
     utils::ParserResolver,
@@ -36,7 +37,8 @@ use crate::{
     app_context::AppContext,
     config::types::RetryConfig,
     middleware::TenantRequestMeta,
-    routers::RouterTrait,
+    policies::PolicyRegistry,
+    routers::{NativeDecisionApi, RouterTrait},
     worker::{WorkerRegistry, WorkerType},
 };
 
@@ -59,6 +61,7 @@ fn not_implemented(message: &'static str) -> Response {
 #[derive(Clone)]
 pub struct GrpcRouter {
     worker_registry: Arc<WorkerRegistry>,
+    policy_registry: Arc<PolicyRegistry>,
     mode: Mode,
     pipeline: RequestPipeline,
     harmony_pipeline: Option<RequestPipeline>,
@@ -195,6 +198,7 @@ impl GrpcRouter {
 
         Ok(GrpcRouter {
             worker_registry,
+            policy_registry,
             mode,
             pipeline,
             harmony_pipeline,
@@ -579,6 +583,29 @@ impl std::fmt::Debug for GrpcRouter {
 impl RouterTrait for GrpcRouter {
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    async fn route_native_decision(
+        &self,
+        headers: Option<&HeaderMap>,
+        _tenant_meta: &TenantRequestMeta,
+        api: NativeDecisionApi,
+        body: serde_json::Value,
+        model_id: &str,
+    ) -> Response {
+        if self.mode != Mode::Regular {
+            return not_implemented("Decision endpoints require a regular worker");
+        }
+        let model_id = self.resolve_canonical_model_id(model_id);
+        native_decision::route(
+            &self.worker_registry,
+            &self.policy_registry,
+            headers,
+            api,
+            body,
+            &model_id,
+        )
+        .await
     }
 
     async fn route_generate(

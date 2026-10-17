@@ -60,9 +60,10 @@ use crate::{
     },
     routers::{
         common::realtime::ws::RealtimeQueryParams,
+        error as route_error,
         gateway::Gateway,
         http::router::{stream_eligible_request_bodies, StreamBodyState},
-        RouterTrait,
+        NativeDecisionApi, RouterTrait,
     },
     service_discovery::{start_service_discovery, ServiceDiscoveryConfig},
     wasm::route::{add_wasm_module, list_wasm_modules, remove_wasm_module},
@@ -144,6 +145,78 @@ async fn v1_models(State(state): State<Arc<AppState>>, req: Request) -> Response
 
 async fn get_model_info(State(state): State<Arc<AppState>>, req: Request) -> Response {
     state.router.get_model_info(req).await
+}
+
+async fn native_decision(
+    state: Arc<AppState>,
+    headers: HeaderMap,
+    request_id: Option<middleware::RequestId>,
+    tenant_meta: middleware::TenantRequestMeta,
+    cancel: middleware::scheduler::PreemptionGuard,
+    api: NativeDecisionApi,
+    mut body: Value,
+) -> Response {
+    let Some(model) = body
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
+        return route_error::bad_request("missing_model", "Request body requires a string model");
+    };
+    if let (Some(object), Some(middleware::RequestId(id))) = (body.as_object_mut(), request_id) {
+        if api == NativeDecisionApi::SystemOne {
+            object.entry("request_id").or_insert(Value::String(id));
+        }
+    }
+    cancel
+        .guard(
+            state
+                .router
+                .route_native_decision(Some(&headers), &tenant_meta, api, body, &model),
+        )
+        .await
+}
+
+async fn v1_decisions(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    request_id: Option<Extension<middleware::RequestId>>,
+    Extension(tenant_meta): Extension<middleware::TenantRequestMeta>,
+    cancel: middleware::scheduler::PreemptionGuard,
+    Json(body): Json<Value>,
+) -> Response {
+    let request_id = request_id.map(|Extension(id)| id);
+    native_decision(
+        state,
+        headers,
+        request_id,
+        tenant_meta,
+        cancel,
+        NativeDecisionApi::Decisions,
+        body,
+    )
+    .await
+}
+
+async fn v1_systemone(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    request_id: Option<Extension<middleware::RequestId>>,
+    Extension(tenant_meta): Extension<middleware::TenantRequestMeta>,
+    cancel: middleware::scheduler::PreemptionGuard,
+    Json(body): Json<Value>,
+) -> Response {
+    let request_id = request_id.map(|Extension(id)| id);
+    native_decision(
+        state,
+        headers,
+        request_id,
+        tenant_meta,
+        cancel,
+        NativeDecisionApi::SystemOne,
+        body,
+    )
+    .await
 }
 
 async fn generate(
@@ -920,6 +993,8 @@ pub fn build_app(
                 middleware::storage_context_middleware,
             ))
             .route("/generate", post(generate))
+            .route("/v1/decisions", post(v1_decisions))
+            .route("/v1/systemone", post(v1_systemone))
             .route("/v1/chat/completions", post(v1_chat_completions))
             .route("/v1/completions", post(v1_completions))
             .route("/rerank", post(rerank))

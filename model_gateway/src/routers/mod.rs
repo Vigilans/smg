@@ -44,6 +44,23 @@ pub use factory::RouterFactory;
 // Re-export HTTP routers for convenience
 pub use http::{pd_router, pd_types, router};
 
+/// Native vLLM decision APIs served by passing the JSON body to the engine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeDecisionApi {
+    Decisions,
+    SystemOne,
+}
+
+impl NativeDecisionApi {
+    /// Name in a worker's `native_decision_apis` label.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Decisions => "decisions",
+            Self::SystemOne => "systemone",
+        }
+    }
+}
+
 /// Core trait for all router implementations
 ///
 /// This trait provides a unified interface for routing requests,
@@ -78,6 +95,22 @@ pub trait RouterTrait: Send + Sync + Debug {
         (
             StatusCode::NOT_IMPLEMENTED,
             "Get model info not implemented",
+        )
+            .into_response()
+    }
+
+    /// Route a native vLLM `/v1/decisions` or `/v1/systemone` JSON body.
+    async fn route_native_decision(
+        &self,
+        _headers: Option<&HeaderMap>,
+        _tenant_meta: &TenantRequestMeta,
+        _api: NativeDecisionApi,
+        _body: serde_json::Value,
+        _model_id: &str,
+    ) -> Response {
+        (
+            StatusCode::NOT_IMPLEMENTED,
+            "Decision endpoint not implemented",
         )
             .into_response()
     }
