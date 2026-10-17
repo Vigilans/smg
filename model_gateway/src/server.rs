@@ -31,6 +31,7 @@ use openai_protocol::{
     },
     rerank::{RerankRequest, RerankResponse, V1RerankReqInput, V1RerankResponse},
     responses::ResponsesRequest,
+    speech::SpeechRequest,
     tokenize::{AddTokenizerRequest, DetokenizeRequest, TokenizeRequest},
     validated::ValidatedJson,
     worker::{
@@ -350,6 +351,23 @@ async fn v1_audio_transcriptions(
             audio,
             &request.model,
         ))
+        .await
+}
+
+async fn v1_audio_speech(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Extension(tenant_meta): Extension<middleware::TenantRequestMeta>,
+    cancel: middleware::scheduler::PreemptionGuard,
+    Json(body): Json<SpeechRequest>,
+) -> Response {
+    let model = body.model.clone();
+    cancel
+        .guard(
+            state
+                .router
+                .route_audio_speech(Some(&headers), &tenant_meta, body, &model),
+        )
         .await
 }
 
@@ -876,6 +894,7 @@ pub fn build_app(
             .route("/v1/messages", post(v1_messages))
             .route("/v1/interactions", post(v1_interactions))
             .route("/v1/classify", post(v1_classify))
+            .route("/v1/audio/speech", post(v1_audio_speech))
             // Per-request buffer-vs-stream decision for typed-JSON bodies;
             // declined requests pass to the handlers untouched.
             .route_layer(axum::middleware::from_fn_with_state(

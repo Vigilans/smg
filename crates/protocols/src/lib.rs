@@ -29,6 +29,7 @@ pub mod realtime_session;
 pub mod rerank;
 pub mod responses;
 pub mod sampling_params;
+pub mod speech;
 pub mod tokenize;
 pub mod transcription;
 pub mod validated;

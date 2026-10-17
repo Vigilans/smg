@@ -28,6 +28,7 @@ use openai_protocol::{
     },
     rerank::{RerankRequest, RerankResponse, RerankResult},
     responses::ResponsesRequest,
+    speech::SpeechRequest,
     transcription::{AudioFile, TranscriptionRequest},
 };
 use reqwest::multipart::{Form, Part};
@@ -2001,6 +2002,17 @@ impl RouterTrait for Router {
             model_id,
         )
         .await
+    }
+
+    async fn route_audio_speech(
+        &self,
+        headers: Option<&HeaderMap>,
+        _tenant_meta: &TenantRequestMeta,
+        body: SpeechRequest,
+        model_id: &str,
+    ) -> Response {
+        self.route_typed_request(headers, body, "/v1/audio/speech", model_id)
+            .await
     }
 
     async fn route_rerank(

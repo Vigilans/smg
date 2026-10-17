@@ -32,6 +32,7 @@ use openai_protocol::{
     },
     rerank::RerankRequest,
     responses::ResponsesRequest,
+    speech::SpeechRequest,
     transcription::{AudioFile, TranscriptionRequest},
     UNKNOWN_MODEL_ID,
 };
@@ -575,6 +576,21 @@ impl RouterTrait for Gateway {
         self.dispatch(Some(model_id), NO_ROUTER, |router| async move {
             router
                 .route_audio_transcriptions(headers, tenant_meta, body, audio, model_id)
+                .await
+        })
+        .await
+    }
+
+    async fn route_audio_speech(
+        &self,
+        headers: Option<&HeaderMap>,
+        tenant_meta: &TenantRequestMeta,
+        body: SpeechRequest,
+        model_id: &str,
+    ) -> Response {
+        self.dispatch(Some(model_id), NO_ROUTER, |router| async move {
+            router
+                .route_audio_speech(headers, tenant_meta, body, model_id)
                 .await
         })
         .await

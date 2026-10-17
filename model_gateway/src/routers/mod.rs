@@ -23,6 +23,7 @@ use openai_protocol::{
     },
     rerank::RerankRequest,
     responses::ResponsesRequest,
+    speech::SpeechRequest,
     transcription::{AudioFile, TranscriptionRequest},
 };
 
@@ -194,6 +195,17 @@ pub trait RouterTrait: Send + Sync + Debug {
             "Audio transcriptions not implemented",
         )
             .into_response()
+    }
+
+    /// Route speech generation requests (OpenAI-compatible /v1/audio/speech).
+    async fn route_audio_speech(
+        &self,
+        _headers: Option<&HeaderMap>,
+        _tenant_meta: &TenantRequestMeta,
+        _body: SpeechRequest,
+        _model_id: &str,
+    ) -> Response {
+        (StatusCode::NOT_IMPLEMENTED, "Audio speech not implemented").into_response()
     }
 
     /// Route rerank requests
