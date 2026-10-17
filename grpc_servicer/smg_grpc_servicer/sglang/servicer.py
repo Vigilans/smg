@@ -132,6 +132,7 @@ class SGLangSchedulerServicer(sglang_scheduler_pb2_grpc.SglangSchedulerServicer)
         model_info: dict,
         scheduler_info: dict,
         health_servicer: SGLangHealthServicer | None = None,
+        tokenizer=None,
     ):
         """Initialize the standalone gRPC service."""
         self.request_manager = request_manager
@@ -143,7 +144,9 @@ class SGLangSchedulerServicer(sglang_scheduler_pb2_grpc.SglangSchedulerServicer)
         self.health_servicer = health_servicer
         # SamplingParams.normalize requires a tokenizer whenever string stops
         # are used; the scheduler matches them with its own tokenizer.
-        if server_args.skip_tokenizer_init:
+        if tokenizer is not None:
+            self.tokenizer = tokenizer
+        elif server_args.skip_tokenizer_init:
             self.tokenizer = None
         else:
             self.tokenizer = get_tokenizer(
@@ -935,6 +938,9 @@ class SGLangSchedulerServicer(sglang_scheduler_pb2_grpc.SglangSchedulerServicer)
             bootstrap_host=bootstrap_host,
             bootstrap_port=bootstrap_port,
             bootstrap_room=bootstrap_room,
+            routed_dp_rank=(
+                grpc_req.data_parallel_rank if grpc_req.data_parallel_rank >= 0 else None
+            ),
             require_reasoning=require_reasoning,
         )
 
@@ -1203,20 +1209,23 @@ class SGLangSchedulerServicer(sglang_scheduler_pb2_grpc.SglangSchedulerServicer)
 
         # Convert output logprobs if present
         output_logprobs_proto = self._convert_output_logprobs_to_proto(
-            output.get("output_logprobs")
+            output.get("all_output_logprobs", output.get("output_logprobs"))
         )
 
         # Convert input logprobs if present
-        input_logprobs_proto = self._convert_input_logprobs_to_proto(output.get("input_logprobs"))
+        input_logprobs_proto = self._convert_input_logprobs_to_proto(
+            output.get("all_input_logprobs", output.get("input_logprobs"))
+        )
 
         return sglang_scheduler_pb2.GenerateResponse(
             request_id=request_id,
             complete=sglang_scheduler_pb2.GenerateComplete(
-                output_ids=output.get("token_ids", []),
+                output_ids=output.get("all_token_ids", output.get("token_ids", [])),
                 finish_reason=finish_reason,
                 prompt_tokens=meta_info.get("prompt_tokens", 0),
                 completion_tokens=meta_info.get(
-                    "completion_tokens", len(output.get("token_ids", []))
+                    "completion_tokens",
+                    len(output.get("all_token_ids", output.get("token_ids", []))),
                 ),
                 cached_tokens=meta_info.get("cached_tokens", 0),
                 reasoning_tokens=meta_info.get("reasoning_tokens", 0),
