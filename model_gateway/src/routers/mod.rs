@@ -218,6 +218,15 @@ pub trait RouterTrait: Send + Sync + Debug {
         (StatusCode::NOT_IMPLEMENTED, "Image editing not implemented").into_response()
     }
 
+    /// Route asynchronous video creation and job operations over HTTP.
+    async fn route_videos(&self, _req: Request<Body>) -> Response {
+        (
+            StatusCode::NOT_IMPLEMENTED,
+            "Video generation not implemented",
+        )
+            .into_response()
+    }
+
     /// Route speech generation requests (OpenAI-compatible /v1/audio/speech).
     async fn route_audio_speech(
         &self,

@@ -608,6 +608,19 @@ impl RouterTrait for Gateway {
         }
     }
 
+    async fn route_videos(&self, req: Request<Body>) -> Response {
+        // Job operations carry an opaque ID rather than a model. The HTTP
+        // router owns the binding to the worker that created that job.
+        let router = self
+            .routers
+            .get(&router_ids::HTTP_REGULAR)
+            .map(|entry| Arc::clone(entry.value()));
+        match router {
+            Some(router) => router.route_videos(req).await,
+            None => NO_ROUTER.into_response(),
+        }
+    }
+
     async fn route_audio_speech(
         &self,
         headers: Option<&HeaderMap>,

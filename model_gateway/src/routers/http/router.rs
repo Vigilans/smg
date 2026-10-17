@@ -13,6 +13,7 @@ use axum::{
     Json,
 };
 use bytes::{Bytes, BytesMut};
+use dashmap::DashMap;
 use futures_util::{stream, Stream, StreamExt};
 use openai_protocol::{
     chat::ChatCompletionRequest,
@@ -85,6 +86,8 @@ use crate::{
 
 mod images;
 mod multipart;
+mod videos;
+
 /// Max body size for a WebRTC `/v1/realtime/calls` SDP offer (10 MiB).
 const WEBRTC_REQUEST_BODY_LIMIT: usize = 10 * 1024 * 1024;
 
@@ -110,6 +113,7 @@ pub struct Router {
     /// retries.
     max_buffered_request_bytes: u64,
     realtime_registry: Arc<RealtimeRegistry>,
+    video_workers: DashMap<String, String>,
     webrtc_bind_addr: Option<std::net::IpAddr>,
     webrtc_stun_server: Option<String>,
 }
@@ -177,6 +181,7 @@ impl Router {
             },
             max_buffered_request_bytes: ctx.router_config.max_buffered_request_bytes,
             realtime_registry: ctx.realtime_registry.clone(),
+            video_workers: DashMap::new(),
             webrtc_bind_addr: ctx.webrtc_bind_addr,
             webrtc_stun_server: ctx.webrtc_stun_server.clone(),
         })
@@ -2022,6 +2027,10 @@ impl RouterTrait for Router {
         self.handle_image_edit(req).await
     }
 
+    async fn route_videos(&self, req: Request<Body>) -> Response {
+        self.handle_video_request(req).await
+    }
+
     async fn route_audio_speech(
         &self,
         headers: Option<&HeaderMap>,
@@ -2359,6 +2368,7 @@ mod tests {
             stream_stall_timeout: Some(Duration::from_secs(60)),
             max_buffered_request_bytes: 0,
             realtime_registry: Arc::new(RealtimeRegistry::new()),
+            video_workers: DashMap::new(),
             webrtc_bind_addr: None,
             webrtc_stun_server: None,
         }
@@ -2716,6 +2726,7 @@ mod tests {
             // for retries.
             max_buffered_request_bytes: 0,
             realtime_registry: Arc::new(RealtimeRegistry::new()),
+            video_workers: DashMap::new(),
             webrtc_bind_addr: None,
             webrtc_stun_server: None,
         }

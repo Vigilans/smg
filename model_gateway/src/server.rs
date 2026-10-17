@@ -380,6 +380,14 @@ async fn v1_image_edits(
     cancel.guard(state.router.route_image_edits(req)).await
 }
 
+async fn v1_videos(
+    State(state): State<Arc<AppState>>,
+    cancel: middleware::scheduler::PreemptionGuard,
+    req: Request<Body>,
+) -> Response {
+    cancel.guard(state.router.route_videos(req)).await
+}
+
 async fn v1_audio_speech(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -984,7 +992,10 @@ pub fn build_app(
     let multipart_upload_routes = with_admission_layer(
         Router::new()
             .route("/v1/audio/transcriptions", post(v1_audio_transcriptions))
-            .route("/v1/images/edits", post(v1_image_edits)),
+            .route("/v1/images/edits", post(v1_image_edits))
+            .route("/v1/videos", post(v1_videos))
+            .route("/v1/videos/{video_id}", get(v1_videos).delete(v1_videos))
+            .route("/v1/videos/{video_id}/content", get(v1_videos)),
         &admission_mode,
         app_state.clone(),
     )
