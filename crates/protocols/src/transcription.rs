@@ -10,6 +10,13 @@ use serde::{Deserialize, Serialize};
 
 use super::common::GenerationRequest;
 
+/// Text field captured from a multipart transcription request.
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+pub struct MultipartTextField {
+    pub name: String,
+    pub value: String,
+}
+
 /// Transcription request - compatible with OpenAI's /v1/audio/transcriptions API.
 ///
 /// The audio file itself is carried out-of-band because the endpoint uses
@@ -37,6 +44,10 @@ pub struct TranscriptionRequest {
 
     /// If true, stream partial transcription events as SSE.
     pub stream: Option<bool>,
+
+    /// Original text parts in wire order, including unknown and repeated fields.
+    #[serde(skip)]
+    pub multipart_fields: Vec<MultipartTextField>,
 }
 
 impl GenerationRequest for TranscriptionRequest {

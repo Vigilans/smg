@@ -13,7 +13,7 @@ use axum::{
 };
 
 #[cfg(feature = "axum")]
-use crate::transcription::{AudioFile, TranscriptionRequest};
+use crate::transcription::{AudioFile, MultipartTextField, TranscriptionRequest};
 
 /// Extractor for `/v1/audio/transcriptions` requests.
 ///
@@ -41,6 +41,7 @@ impl<S: Send + Sync> FromRequest<S> for AudioTranscriptionMultipart {
         let mut file_content_type: Option<String> = None;
         let mut request = TranscriptionRequest::default();
         let mut timestamp_granularities: Vec<String> = Vec::new();
+        let mut file_seen = false;
 
         loop {
             let field = match multipart.next_field().await {
@@ -52,73 +53,65 @@ impl<S: Send + Sync> FromRequest<S> for AudioTranscriptionMultipart {
             };
 
             let name = field.name().unwrap_or("").to_string();
-            match name.as_str() {
-                "file" => {
-                    file_name = field.file_name().map(str::to_string);
-                    file_content_type = field.content_type().map(str::to_string);
-                    match field.bytes().await {
-                        Ok(b) => file_bytes = Some(b),
-                        Err(e) => {
-                            return Err(bad_request(format!(
-                                "Failed to read audio file bytes: {e}"
-                            )));
-                        }
+            if name == "file" {
+                if file_seen {
+                    return Err(bad_request(
+                        "Multiple 'file' parts are not supported".to_string(),
+                    ));
+                }
+                file_seen = true;
+                file_name = field.file_name().map(str::to_string);
+                file_content_type = field.content_type().map(str::to_string);
+                match field.bytes().await {
+                    Ok(b) => file_bytes = Some(b),
+                    Err(e) => {
+                        return Err(bad_request(format!("Failed to read audio file bytes: {e}")));
                     }
                 }
-                "model" => match field.text().await {
-                    Ok(t) => request.model = t,
-                    Err(e) => return Err(bad_text_field("model", e)),
-                },
-                "language" => match field.text().await {
-                    Ok(t) => request.language = Some(t),
-                    Err(e) => return Err(bad_text_field("language", e)),
-                },
-                "prompt" => match field.text().await {
-                    Ok(t) => request.prompt = Some(t),
-                    Err(e) => return Err(bad_text_field("prompt", e)),
-                },
-                "response_format" => match field.text().await {
-                    Ok(t) => request.response_format = Some(t),
-                    Err(e) => return Err(bad_text_field("response_format", e)),
-                },
-                "temperature" => match field.text().await {
-                    Ok(t) => match t.trim().parse::<f32>() {
-                        Ok(v) if v.is_finite() && (0.0..=1.0).contains(&v) => {
-                            request.temperature = Some(v);
-                        }
-                        Ok(v) => {
-                            return Err(bad_request(format!(
+                continue;
+            }
+
+            if field.file_name().is_some() {
+                let _ = field.bytes().await;
+                continue;
+            }
+
+            let text = field.text().await.map_err(|e| bad_text_field(&name, e))?;
+            request.multipart_fields.push(MultipartTextField {
+                name: name.clone(),
+                value: text.clone(),
+            });
+            match name.as_str() {
+                "model" => request.model = text,
+                "language" => request.language = Some(text),
+                "prompt" => request.prompt = Some(text),
+                "response_format" => request.response_format = Some(text),
+                "temperature" => match text.trim().parse::<f32>() {
+                    Ok(v) if v.is_finite() && (0.0..=1.0).contains(&v) => {
+                        request.temperature = Some(v);
+                    }
+                    Ok(v) => {
+                        return Err(bad_request(format!(
                                 "Invalid 'temperature' value: {v} (must be a finite number in [0.0, 1.0])"
                             )));
-                        }
-                        Err(e) => {
-                            return Err(bad_request(format!("Invalid 'temperature' value: {e}")));
-                        }
-                    },
-                    Err(e) => return Err(bad_text_field("temperature", e)),
+                    }
+                    Err(e) => {
+                        return Err(bad_request(format!("Invalid 'temperature' value: {e}")));
+                    }
                 },
                 "timestamp_granularities" | "timestamp_granularities[]" => {
-                    match field.text().await {
-                        Ok(t) => timestamp_granularities.push(t),
-                        Err(e) => return Err(bad_text_field("timestamp_granularities", e)),
+                    timestamp_granularities.push(text);
+                }
+                "stream" => match text.as_str() {
+                    "true" | "True" | "TRUE" | "1" => request.stream = Some(true),
+                    "false" | "False" | "FALSE" | "0" => request.stream = Some(false),
+                    other => {
+                        return Err(bad_request(format!(
+                            "Invalid 'stream' value: '{other}' (expected true/false/1/0)"
+                        )));
                     }
-                }
-                "stream" => match field.text().await {
-                    Ok(t) => match t.as_str() {
-                        "true" | "True" | "TRUE" | "1" => request.stream = Some(true),
-                        "false" | "False" | "FALSE" | "0" => request.stream = Some(false),
-                        other => {
-                            return Err(bad_request(format!(
-                                "Invalid 'stream' value: '{other}' (expected true/false/1/0)"
-                            )));
-                        }
-                    },
-                    Err(e) => return Err(bad_text_field("stream", e)),
                 },
-                _ => {
-                    // Unknown field; drain to free resources but otherwise ignore.
-                    let _ = field.bytes().await;
-                }
+                _ => {}
             }
         }
 
@@ -159,4 +152,59 @@ fn bad_request(message: String) -> Response {
 #[cfg(feature = "axum")]
 fn bad_text_field(field: &str, e: MultipartError) -> Response {
     bad_request(format!("Failed to read '{field}' field: {e}"))
+}
+
+#[cfg(all(test, feature = "axum"))]
+mod tests {
+    use axum::{body::Body, extract::FromRequest, http::Request};
+
+    use super::*;
+
+    fn request(parts: &str) -> Request<Body> {
+        Request::builder()
+            .header(
+                "content-type",
+                "multipart/form-data; boundary=test-boundary",
+            )
+            .body(Body::from(parts.to_string()))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn preserves_unknown_text_and_ignores_unknown_file_parts() {
+        let request = request(concat!(
+            "--test-boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nasr\r\n",
+            "--test-boundary\r\nContent-Disposition: form-data; name=\"repetition_penalty\"\r\n\r\n1.1\r\n",
+            "--test-boundary\r\nContent-Disposition: form-data; name=\"sidecar\"; filename=\"note.txt\"\r\n\r\nignore me\r\n",
+            "--test-boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\nRIFF\r\n",
+            "--test-boundary--\r\n"
+        ));
+
+        let parsed = AudioTranscriptionMultipart::from_request(request, &())
+            .await
+            .unwrap();
+        assert_eq!(parsed.request.multipart_fields.len(), 2);
+        assert_eq!(
+            parsed.request.multipart_fields[1].name,
+            "repetition_penalty"
+        );
+        assert_eq!(parsed.audio.file_name, "audio.wav");
+        assert_eq!(parsed.audio.content_type.as_deref(), Some("audio/wav"));
+    }
+
+    #[tokio::test]
+    async fn rejects_multiple_file_parts() {
+        let request = request(concat!(
+            "--test-boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nasr\r\n",
+            "--test-boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"one.wav\"\r\n\r\none\r\n",
+            "--test-boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"two.wav\"\r\n\r\ntwo\r\n",
+            "--test-boundary--\r\n"
+        ));
+
+        let response = match AudioTranscriptionMultipart::from_request(request, &()).await {
+            Ok(_) => panic!("multiple file parts must be rejected"),
+            Err(response) => response,
+        };
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
 }

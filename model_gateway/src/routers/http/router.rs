@@ -1514,7 +1514,21 @@ fn build_transcription_form(
             .map_err(|e| format!("Invalid audio content-type '{ct}': {e}"))?;
     }
 
-    let mut form = Form::new().part("file", file_part).text(
+    let mut form = Form::new().part("file", file_part);
+
+    if !body.multipart_fields.is_empty() {
+        for field in &body.multipart_fields {
+            let value = if field.name == "model" {
+                canonical_model.unwrap_or(&body.model).to_string()
+            } else {
+                field.value.clone()
+            };
+            form = form.text(field.name.clone(), value);
+        }
+        return Ok(form);
+    }
+
+    form = form.text(
         "model",
         canonical_model.map_or_else(|| body.model.clone(), ToOwned::to_owned),
     );
