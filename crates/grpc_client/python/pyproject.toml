@@ -42,3 +42,8 @@ include = ["smg_grpc_proto*"]
 
 [tool.setuptools.package-data]
 smg_grpc_proto = ["proto/*.proto", "generated/*.py", "generated/*.pyi"]
+
+# setup.py generates the stubs from the .proto files at build time, so an
+# editable install rebuilds when a .proto file changes.
+[tool.uv]
+cache-keys = [{ file = "pyproject.toml" }, { file = "setup.py" }, { file = "smg_grpc_proto/proto/*.proto" }]
